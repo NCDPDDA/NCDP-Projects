@@ -1,0 +1,58 @@
+WITH most_recent_committee AS (
+  SELECT
+    r.van_precinct_id,
+    r.committee_name,
+    r.date_canvassed,
+    ROW_NUMBER() OVER (PARTITION BY r.van_precinct_id ORDER BY r.date_canvassed DESC) AS rn
+  FROM `demsncsp.vansync_derived.responses_myv` r
+  JOIN `demsncsp.vansync_derived.contacts_myv` c
+    ON r.van_precinct_id = c.van_precinct_id
+  WHERE c.walk_attempt = 1
+)
+SELECT 
+  count(p.person_id) as num_voters,
+  p.van_precinct_id, 
+  p.van_precinct_name,
+  p.county_name,
+  MAX(
+    CASE 
+      WHEN cm_last_week.van_precinct_id IS NOT NULL THEN 3
+      WHEN cm_last_month.van_precinct_id IS NOT NULL THEN 2
+      WHEN cm_last_year.van_precinct_id IS NOT NULL THEN 1
+      ELSE 0
+    END
+  ) as walk_attempt_status,
+  mr.committee_name as most_recent_committee_name
+FROM `democrats.analytics_nc.person` p 
+JOIN `democrats.voter_file_nc.address_misc_district` amd
+  ON p.voting_address_id = amd.address_id
+JOIN `democrats.voter_file_nc.misc_district` md
+  ON md.misc_district_id = amd.misc_district_id
+LEFT JOIN (
+  SELECT DISTINCT van_precinct_id
+  FROM `demsncsp.vansync_derived.contacts_myv`
+  WHERE date_canvassed >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 WEEK)
+    AND date_canvassed < CURRENT_DATE()
+    AND walk_attempt = 1
+) cm_last_week ON p.van_precinct_id = cm_last_week.van_precinct_id
+LEFT JOIN (
+  SELECT DISTINCT van_precinct_id
+  FROM `demsncsp.vansync_derived.contacts_myv`
+  WHERE date_canvassed >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH)
+    AND date_canvassed < CURRENT_DATE()
+    AND walk_attempt = 1
+) cm_last_month ON p.van_precinct_id = cm_last_month.van_precinct_id
+LEFT JOIN (
+  SELECT DISTINCT van_precinct_id
+  FROM `demsncsp.vansync_derived.contacts_myv`
+  WHERE date_canvassed >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 YEAR)
+    AND date_canvassed < CURRENT_DATE()
+    AND walk_attempt = 1
+) cm_last_year ON p.van_precinct_id = cm_last_year.van_precinct_id
+LEFT JOIN most_recent_committee mr ON p.van_precinct_id = mr.van_precinct_id AND mr.rn = 1
+WHERE p.reg_voter_flag
+  AND p.van_precinct_id IS NOT NULL
+--  AND upper(p.county_name) IN ("AVERY") -- Remove county filter
+--  AND md.name IN ("DUR")
+GROUP BY p.van_precinct_id, p.van_precinct_name, p.county_name, mr.committee_name
+ORDER BY p.county_name, p.van_precinct_name;
